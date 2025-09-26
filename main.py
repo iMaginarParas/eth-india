@@ -3,8 +3,6 @@ AI Portfolio Agent Backend - main.py (Simplified)
 Focus on testing core integrations:
 - The Graph: fetching wallet data
 - Pyth: market feed integration  
-- ASI Alliance: AI agent reasoning
-- 1inch: trade execution
 - Polygon: deployment chain
 """
 
@@ -27,8 +25,6 @@ from web3 import Web3
 # Import our custom modules
 from thegraph import GraphDataFetcher
 from pyth import PythPriceService
-from asi_alliance import ASIAgentReasoning
-from oneinch import OneInchExecutor
 from polygon import PolygonConnector
 
 # Configure logging
@@ -39,8 +35,6 @@ logger = logging.getLogger(__name__)
 class Config:
     THE_GRAPH_API_KEY: str = os.getenv("THE_GRAPH_API_KEY", "demo-key")
     PYTH_HERMES_URL: str = "https://hermes.pyth.network"
-    ASI_AGENT_ENDPOINT: str = os.getenv("ASI_AGENT_ENDPOINT", "")
-    ONEINCH_API_KEY: str = os.getenv("ONEINCH_API_KEY", "")
     POLYGON_RPC_URL: str = "https://polygon-rpc.com"
     POLYGON_CHAIN_ID: int = 137
 
@@ -49,12 +43,6 @@ config = Config()
 # Pydantic Models
 class WalletRequest(BaseModel):
     address: str
-
-class TradeRequest(BaseModel):
-    token_from: str
-    token_to: str
-    amount: str
-    user_address: str
 
 # FastAPI App
 app = FastAPI(title="AI Portfolio Agent - Core Testing", version="1.0.0")
@@ -70,14 +58,12 @@ app.add_middleware(
 # Global instances
 graph_fetcher: Optional[GraphDataFetcher] = None
 pyth_service: Optional[PythPriceService] = None
-asi_agent: Optional[ASIAgentReasoning] = None
-oneinch_executor: Optional[OneInchExecutor] = None
 polygon_connector: Optional[PolygonConnector] = None
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize all services"""
-    global graph_fetcher, pyth_service, asi_agent, oneinch_executor, polygon_connector
+    global graph_fetcher, pyth_service, polygon_connector
     
     logger.info("🚀 Starting AI Portfolio Agent Core Services...")
     
@@ -89,17 +75,6 @@ async def startup_event():
         # Initialize Pyth price service
         pyth_service = PythPriceService(hermes_url=config.PYTH_HERMES_URL)
         logger.info("✅ Pyth service initialized")
-        
-        # Initialize ASI Alliance agent
-        asi_agent = ASIAgentReasoning(endpoint=config.ASI_AGENT_ENDPOINT)
-        logger.info("✅ ASI Alliance service initialized")
-        
-        # Initialize 1inch executor
-        oneinch_executor = OneInchExecutor(
-            api_key=config.ONEINCH_API_KEY,
-            chain_id=config.POLYGON_CHAIN_ID
-        )
-        logger.info("✅ 1inch service initialized")
         
         # Initialize Polygon connector
         polygon_connector = PolygonConnector(
@@ -157,57 +132,7 @@ async def test_pyth(symbols: str):
         logger.error(f"❌ Pyth test failed: {e}")
         raise HTTPException(status_code=500, detail=f"Pyth error: {str(e)}")
 
-# 3. ASI ALLIANCE - Test AI agent reasoning
-@app.post("/test/asi")
-async def test_asi_agent(request: dict):
-    """Test ASI Alliance AI reasoning"""
-    try:
-        logger.info("🤖 Testing ASI Alliance AI agent reasoning")
-        
-        # Generate AI insight
-        insight = await asi_agent.generate_insight(
-            token_symbol=request.get("token", "ETH"),
-            portfolio_data=request.get("portfolio", {}),
-            market_data=request.get("market", {}),
-            user_context=request.get("context", {})
-        )
-        
-        return {
-            "service": "ASI Alliance",
-            "status": "success",
-            "insight": insight
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ ASI Alliance test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"ASI Alliance error: {str(e)}")
-
-# 4. 1INCH - Test trade execution
-@app.post("/test/1inch/quote")
-async def test_1inch_quote(trade: TradeRequest):
-    """Test 1inch trade quote"""
-    try:
-        logger.info(f"🔄 Testing 1inch quote: {trade.token_from} -> {trade.token_to}")
-        
-        # Get swap quote from 1inch
-        quote = await oneinch_executor.get_swap_quote(
-            token_from=trade.token_from,
-            token_to=trade.token_to,
-            amount=trade.amount,
-            user_address=trade.user_address
-        )
-        
-        return {
-            "service": "1inch",
-            "status": "success",
-            "quote": quote
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 1inch test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"1inch error: {str(e)}")
-
-# 5. POLYGON - Test blockchain connection
+# 3. POLYGON - Test blockchain connection
 @app.get("/test/polygon")
 async def test_polygon():
     """Test Polygon blockchain connection"""
@@ -229,6 +154,49 @@ async def test_polygon():
         logger.error(f"❌ Polygon test failed: {e}")
         raise HTTPException(status_code=500, detail=f"Polygon error: {str(e)}")
 
+# Get wallet balance on Polygon
+@app.get("/test/polygon/balance/{address}")
+async def test_polygon_balance(address: str):
+    """Test getting wallet balance on Polygon"""
+    try:
+        logger.info(f"💰 Testing Polygon balance for address: {address}")
+        
+        # Get MATIC balance
+        balance_info = await polygon_connector.get_balance(address)
+        
+        return {
+            "service": "Polygon Balance",
+            "status": "success",
+            "address": address,
+            "balance": balance_info
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Polygon balance test failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Polygon balance error: {str(e)}")
+
+# Get token balance on Polygon
+@app.get("/test/polygon/token/{token_address}/{user_address}")
+async def test_polygon_token_balance(token_address: str, user_address: str):
+    """Test getting ERC20 token balance on Polygon"""
+    try:
+        logger.info(f"🪙 Testing token balance for {token_address} and user {user_address}")
+        
+        # Get token balance
+        token_balance = await polygon_connector.get_token_balance(token_address, user_address)
+        
+        return {
+            "service": "Polygon Token Balance",
+            "status": "success",
+            "token_address": token_address,
+            "user_address": user_address,
+            "balance": token_balance
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Token balance test failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Token balance error: {str(e)}")
+
 # COMPREHENSIVE TEST - Test all services together
 @app.post("/test/all")
 async def test_all_services(wallet: WalletRequest):
@@ -248,39 +216,23 @@ async def test_all_services(wallet: WalletRequest):
         
         # 2. Test Pyth - Get prices for common tokens
         try:
-            prices = await pyth_service.get_token_prices(["ETH", "BTC", "MATIC"])
+            prices = await pyth_service.get_token_prices(["ETH", "BTC", "MATIC", "USDC"])
             results["pyth"] = {"status": "success", "prices": prices}
         except Exception as e:
             results["pyth"] = {"status": "failed", "error": str(e)}
         
-        # 3. Test ASI Alliance - Generate insight
-        try:
-            insight = await asi_agent.generate_insight(
-                token_symbol="ETH",
-                portfolio_data=results.get("thegraph", {}).get("data", {}),
-                market_data=results.get("pyth", {}).get("prices", {}),
-                user_context={"address": address}
-            )
-            results["asi_alliance"] = {"status": "success", "insight": insight}
-        except Exception as e:
-            results["asi_alliance"] = {"status": "failed", "error": str(e)}
-        
-        # 4. Test 1inch - Get a sample quote
-        try:
-            quote = await oneinch_executor.get_swap_quote(
-                token_from="0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",  # WETH on Polygon
-                token_to="0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   # WMATIC
-                amount="100000000000000000",  # 0.1 ETH
-                user_address=address
-            )
-            results["oneinch"] = {"status": "success", "quote": quote}
-        except Exception as e:
-            results["oneinch"] = {"status": "failed", "error": str(e)}
-        
-        # 5. Test Polygon - Get network status
+        # 3. Test Polygon - Get network status and balance
         try:
             block_info = await polygon_connector.get_latest_block()
-            results["polygon"] = {"status": "success", "block": block_info}
+            network_info = await polygon_connector.get_network_info()
+            balance_info = await polygon_connector.get_balance(address)
+            
+            results["polygon"] = {
+                "status": "success", 
+                "block": block_info,
+                "network": network_info,
+                "balance": balance_info
+            }
         except Exception as e:
             results["polygon"] = {"status": "failed", "error": str(e)}
         
@@ -302,6 +254,86 @@ async def test_all_services(wallet: WalletRequest):
         logger.error(f"❌ Comprehensive test failed: {e}")
         raise HTTPException(status_code=500, detail=f"Comprehensive test error: {str(e)}")
 
+# Portfolio Analysis - Combine data from all services
+@app.post("/portfolio/analyze")
+async def analyze_portfolio(wallet: WalletRequest):
+    """Analyze portfolio by combining data from all services"""
+    try:
+        address = wallet.address
+        logger.info(f"🔍 Analyzing portfolio for address: {address}")
+        
+        # Get portfolio data from The Graph
+        portfolio_data = await graph_fetcher.get_user_portfolio(address)
+        
+        # Get current prices for portfolio tokens
+        token_symbols = [token["symbol"] for token in portfolio_data.get("tokens", [])]
+        if token_symbols:
+            prices = await pyth_service.get_token_prices(token_symbols)
+        else:
+            prices = {}
+        
+        # Get network status
+        network_info = await polygon_connector.get_network_info()
+        balance_info = await polygon_connector.get_balance(address)
+        
+        # Calculate portfolio values
+        total_value_usd = Decimal('0')
+        enriched_tokens = []
+        
+        for token in portfolio_data.get("tokens", []):
+            symbol = token["symbol"]
+            balance = Decimal(str(token["balance"]))
+            
+            # Add price data if available
+            if symbol in prices:
+                current_price = prices[symbol]["price"]
+                token_value_usd = balance * current_price
+                total_value_usd += token_value_usd
+                
+                enriched_tokens.append({
+                    **token,
+                    "current_price_usd": str(current_price),
+                    "value_usd": str(token_value_usd),
+                    "price_source": prices[symbol]["source"]
+                })
+            else:
+                enriched_tokens.append({
+                    **token,
+                    "current_price_usd": "0",
+                    "value_usd": "0",
+                    "price_source": "unavailable"
+                })
+        
+        # Calculate portfolio allocation percentages
+        for token in enriched_tokens:
+            if total_value_usd > 0:
+                allocation_pct = (Decimal(token["value_usd"]) / total_value_usd) * 100
+                token["allocation_percentage"] = str(allocation_pct.quantize(Decimal('0.01')))
+            else:
+                token["allocation_percentage"] = "0"
+        
+        return {
+            "address": address,
+            "analysis_timestamp": "2024-01-01T00:00:00Z",
+            "network_info": network_info,
+            "native_balance": balance_info,
+            "portfolio_summary": {
+                "total_value_usd": str(total_value_usd),
+                "token_count": len(enriched_tokens),
+                "positions_count": len(portfolio_data.get("positions", []))
+            },
+            "tokens": enriched_tokens,
+            "positions": portfolio_data.get("positions", []),
+            "price_data_sources": {
+                symbol: data.get("source", "unknown") 
+                for symbol, data in prices.items()
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Portfolio analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Portfolio analysis error: {str(e)}")
+
 # Health Check
 @app.get("/health")
 async def health_check():
@@ -309,8 +341,6 @@ async def health_check():
     services_status = {
         "thegraph": graph_fetcher is not None,
         "pyth": pyth_service is not None,
-        "asi_alliance": asi_agent is not None,
-        "oneinch": oneinch_executor is not None,
         "polygon": polygon_connector is not None
     }
     
@@ -332,16 +362,18 @@ async def root():
         "endpoints": {
             "test_thegraph": "GET /test/thegraph/{address} - Test wallet data fetching",
             "test_pyth": "GET /test/pyth/{symbols} - Test price feeds (ETH,BTC,MATIC)",
-            "test_asi": "POST /test/asi - Test AI reasoning",
-            "test_1inch": "POST /test/1inch/quote - Test trade quotes",
             "test_polygon": "GET /test/polygon - Test blockchain connection",
+            "test_polygon_balance": "GET /test/polygon/balance/{address} - Test wallet balance",
+            "test_polygon_token": "GET /test/polygon/token/{token_address}/{user_address} - Test token balance",
             "test_all": "POST /test/all - Test all services together",
+            "analyze_portfolio": "POST /portfolio/analyze - Comprehensive portfolio analysis",
             "health": "GET /health - Service health check"
         },
         "example_usage": {
             "wallet_test": "POST /test/all with {\"address\": \"0x...\"}",
             "price_test": "GET /test/pyth/ETH,BTC,MATIC",
-            "blockchain_test": "GET /test/polygon"
+            "blockchain_test": "GET /test/polygon",
+            "portfolio_analysis": "POST /portfolio/analyze with {\"address\": \"0x...\"}"
         }
     }
 

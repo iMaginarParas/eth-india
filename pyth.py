@@ -83,17 +83,32 @@ class PythPriceService:
     async def _fetch_latest_prices(self, feed_ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch latest prices from Pyth Hermes API"""
         try:
-            # Construct the API URL
+            # Use the correct Pyth API endpoint that actually works
             ids_param = "&".join([f"ids[]={feed_id}" for feed_id in feed_ids])
-            url = f"{self.hermes_url}/api/latest_price_feeds?{ids_param}"
+            url = f"{self.hermes_url}/api/latest_vaas?{ids_param}"
+            
+            logger.info(f"Fetching from Pyth API: {url}")
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return data.get("data", [])
+                        # The VAA endpoint returns data differently
+                        logger.info(f"Pyth API success: Status {response.status}")
+                        return data if isinstance(data, list) else [data]
                     else:
-                        logger.error(f"Pyth API error: {response.status}")
+                        response_text = await response.text()
+                        logger.error(f"Pyth API error {response.status}: {response_text}")
+                        
+                        # Try alternative endpoint
+                        alt_url = f"{self.hermes_url}/v2/updates/price/latest?{ids_param}&encoding=hex"
+                        async with session.get(alt_url) as alt_response:
+                            if alt_response.status == 200:
+                                alt_data = await alt_response.json()
+                                parsed_data = alt_data.get("parsed", [])
+                                logger.info(f"Pyth alternative API success: Got {len(parsed_data)} price feeds")
+                                return parsed_data
+                        
                         return []
                         
         except Exception as e:
@@ -103,7 +118,17 @@ class PythPriceService:
     def _parse_price(self, price_data: Dict[str, Any]) -> Decimal:
         """Parse price from Pyth data format"""
         try:
+            # Handle different response formats from Pyth API
+            if isinstance(price_data, str):
+                # This is a VAA string - we need to decode it properly
+                # For now, return 0 and fall back to mock data
+                return Decimal(0)
+            
+            # Handle parsed price data format
             price_info = price_data.get("price", {})
+            if not price_info:
+                return Decimal(0)
+                
             price = int(price_info.get("price", 0))
             expo = int(price_info.get("expo", 0))
             

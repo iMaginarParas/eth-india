@@ -52,7 +52,8 @@ class PolygonConnector:
                 "transaction_count": len(block.transactions),
                 "miner": block.miner,
                 "difficulty": block.difficulty,
-                "total_difficulty": block.totalDifficulty
+                # Note: totalDifficulty removed as it's not available in newer versions
+                "size": getattr(block, 'size', 0)
             }
             
         except Exception as e:
@@ -94,16 +95,23 @@ class PolygonConnector:
             if not self.w3 or not self.w3.is_connected():
                 return self._get_mock_balance(address)
             
+            # Convert to checksum address to handle case sensitivity
+            try:
+                checksum_address = Web3.to_checksum_address(address)
+            except Exception as e:
+                logger.error(f"Invalid address format: {address}")
+                return {"error": f"Invalid address format: {address}"}
+            
             # Validate address
-            if not Web3.is_address(address):
-                raise ValueError(f"Invalid address: {address}")
+            if not Web3.is_address(checksum_address):
+                raise ValueError(f"Invalid address: {checksum_address}")
             
             # Get balance in wei
-            balance_wei = self.w3.eth.get_balance(address)
+            balance_wei = self.w3.eth.get_balance(checksum_address)
             balance_matic = self.w3.from_wei(balance_wei, 'ether')
             
             return {
-                "address": Web3.to_checksum_address(address),
+                "address": checksum_address,
                 "balance_wei": str(balance_wei),
                 "balance_matic": str(balance_matic),
                 "balance_usd": str(float(balance_matic) * 0.85),  # Mock price
@@ -257,6 +265,13 @@ class PolygonConnector:
             if not self.w3 or not self.w3.is_connected():
                 return self._get_mock_token_balance(token_address, user_address)
             
+            # Convert addresses to checksum format
+            try:
+                token_checksum = Web3.to_checksum_address(token_address)
+                user_checksum = Web3.to_checksum_address(user_address)
+            except Exception as e:
+                return {"error": f"Invalid address format: {e}"}
+            
             # ERC20 ABI for balanceOf function
             erc20_abi = [
                 {
@@ -284,12 +299,12 @@ class PolygonConnector:
             
             # Create contract instance
             token_contract = self.w3.eth.contract(
-                address=Web3.to_checksum_address(token_address),
+                address=token_checksum,
                 abi=erc20_abi
             )
             
             # Get balance, decimals, and symbol
-            balance = token_contract.functions.balanceOf(user_address).call()
+            balance = token_contract.functions.balanceOf(user_checksum).call()
             decimals = token_contract.functions.decimals().call()
             symbol = token_contract.functions.symbol().call()
             
@@ -297,8 +312,8 @@ class PolygonConnector:
             human_balance = Decimal(balance) / (Decimal(10) ** decimals)
             
             return {
-                "token_address": Web3.to_checksum_address(token_address),
-                "user_address": Web3.to_checksum_address(user_address),
+                "token_address": token_checksum,
+                "user_address": user_checksum,
                 "balance_raw": str(balance),
                 "balance": str(human_balance),
                 "decimals": decimals,
@@ -328,7 +343,7 @@ class PolygonConnector:
                 "transactions": [tx.hex() for tx in block.transactions],
                 "miner": block.miner,
                 "difficulty": block.difficulty,
-                "size": block.size
+                "size": getattr(block, 'size', 0)
             }
             
         except Exception as e:
@@ -349,7 +364,7 @@ class PolygonConnector:
             "transaction_count": 150,
             "miner": "0x0000000000000000000000000000000000000000",
             "difficulty": 1,
-            "total_difficulty": 50000000,
+            "size": 50000,
             "mock": True
         }
     
@@ -429,43 +444,18 @@ class PolygonConnector:
             "mock": True
         }
     
-    async def get_transaction_history(self, address: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get transaction history for an address"""
-        try:
-            # This would require a more sophisticated indexing service
-            # For now, return mock transaction history
-            
-            transactions = []
-            for i in range(min(limit, 5)):  # Mock up to 5 transactions
-                tx_hash = f"0x{''.join([str(i)] * 64)}"
-                transactions.append({
-                    "hash": tx_hash,
-                    "from": "0x742d35Cc6634C0532925a3b8D0C026Ba85C5d9C6" if i % 2 == 0 else address,
-                    "to": address if i % 2 == 0 else "0x1234567890123456789012345678901234567890",
-                    "value_matic": str(0.1 * (i + 1)),
-                    "timestamp": 1700000000 + (i * 3600),  # 1 hour apart
-                    "status": 1,
-                    "type": "receive" if i % 2 == 0 else "send",
-                    "mock": True
-                })
-            
-            return transactions
-            
-        except Exception as e:
-            logger.error(f"Error getting transaction history: {e}")
-            return []
-    
     async def validate_address(self, address: str) -> Dict[str, Any]:
         """Validate an Ethereum/Polygon address"""
         try:
             is_valid = Web3.is_address(address)
-            is_checksum = address == Web3.to_checksum_address(address) if is_valid else False
+            checksum_address = Web3.to_checksum_address(address) if is_valid else None
+            is_checksum = address == checksum_address if is_valid else False
             
             return {
                 "address": address,
                 "is_valid": is_valid,
                 "is_checksum": is_checksum,
-                "checksum_address": Web3.to_checksum_address(address) if is_valid else None
+                "checksum_address": checksum_address
             }
             
         except Exception as e:
@@ -474,44 +464,6 @@ class PolygonConnector:
                 "is_valid": False,
                 "error": str(e)
             }
-    
-    async def get_contract_info(self, contract_address: str) -> Dict[str, Any]:
-        """Get information about a smart contract"""
-        try:
-            if not self.w3 or not self.w3.is_connected():
-                return self._get_mock_contract_info(contract_address)
-            
-            # Check if address is a contract
-            code = self.w3.eth.get_code(contract_address)
-            is_contract = len(code) > 0
-            
-            if not is_contract:
-                return {
-                    "address": contract_address,
-                    "is_contract": False,
-                    "message": "Address is not a contract"
-                }
-            
-            return {
-                "address": Web3.to_checksum_address(contract_address),
-                "is_contract": True,
-                "bytecode_length": len(code),
-                "has_code": True
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting contract info: {e}")
-            return {"error": str(e)}
-    
-    def _get_mock_contract_info(self, contract_address: str) -> Dict[str, Any]:
-        """Generate mock contract information"""
-        return {
-            "address": contract_address,
-            "is_contract": True,
-            "bytecode_length": 5000,
-            "has_code": True,
-            "mock": True
-        }
     
     async def check_connection(self) -> Dict[str, Any]:
         """Check blockchain connection status"""
@@ -549,32 +501,3 @@ class PolygonConnector:
                 "rpc_url": self.rpc_url,
                 "error": str(e)
             }
-    
-    async def get_logs(self, contract_address: str, from_block: int, to_block: int) -> List[Dict[str, Any]]:
-        """Get contract event logs"""
-        try:
-            if not self.w3 or not self.w3.is_connected():
-                return []  # Return empty logs for mock
-            
-            # Get logs for the contract
-            logs = self.w3.eth.get_logs({
-                'address': contract_address,
-                'fromBlock': from_block,
-                'toBlock': to_block
-            })
-            
-            return [
-                {
-                    "address": log.address,
-                    "topics": [topic.hex() for topic in log.topics],
-                    "data": log.data.hex(),
-                    "block_number": log.blockNumber,
-                    "transaction_hash": log.transactionHash.hex(),
-                    "log_index": log.logIndex
-                }
-                for log in logs
-            ]
-            
-        except Exception as e:
-            logger.error(f"Error getting logs: {e}")
-            return []

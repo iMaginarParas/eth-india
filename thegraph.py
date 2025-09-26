@@ -27,7 +27,14 @@ class GraphDataFetcher:
         try:
             logger.info(f"Fetching portfolio for address: {address}")
             
-            # For demo purposes, we'll return mock data
+            # If API key is not demo, try to fetch real data first
+            if self.api_key != "demo-key":
+                real_data = await self._fetch_real_portfolio_data(address)
+                if real_data:
+                    logger.info("Using real data from The Graph")
+                    return real_data
+            
+            # For demo purposes, we'll return mock data as fallback
             # In production, you'd query actual subgraphs
             portfolio_data = {
                 "address": address.lower(),
@@ -65,15 +72,11 @@ class GraphDataFetcher:
                     }
                 ],
                 "transactions": [],
-                "last_updated": "2024-01-01T00:00:00Z"
+                "last_updated": "2024-01-01T00:00:00Z",
+                "data_source": "mock"
             }
             
-            # If API key is not demo, try to fetch real data
-            if self.api_key != "demo-key":
-                real_data = await self._fetch_real_portfolio_data(address)
-                if real_data:
-                    portfolio_data = real_data
-            
+            logger.info("Using mock data as fallback")
             return portfolio_data
             
         except Exception as e:
@@ -90,39 +93,55 @@ class GraphDataFetcher:
     async def _fetch_real_portfolio_data(self, address: str) -> Optional[Dict[str, Any]]:
         """Fetch real data from The Graph (when API key is provided)"""
         try:
-            # Example GraphQL query for token balances
+            # Use a real Polygon token balances subgraph
+            # This is an example - you might need to find the correct subgraph for your use case
+            url = f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/HdVdERFUe8h61vm2fDyycHgxjsde5PbB832NHgJfZNqK"
+            
+            # GraphQL query for user token balances
             query = """
             {
-              user(id: "%s") {
+              accounts(where: {id: "%s"}) {
                 id
                 balances {
+                  amount
                   token {
                     id
                     symbol
                     name
                     decimals
                   }
-                  balance
                 }
               }
             }
             """ % address.lower()
             
-            # This is a placeholder - you'd implement actual subgraph queries here
+            logger.info(f"Querying The Graph with real API key: {url[:50]}...")
+            
             async with aiohttp.ClientSession() as session:
-                # Example: Query a token balance subgraph
-                # url = self.subgraphs["erc20_tokens"]
-                # payload = {"query": query}
-                # async with session.post(url, json=payload) as response:
-                #     if response.status == 200:
-                #         data = await response.json()
-                #         return self._parse_graph_response(data)
-                
-                # For now, return None to use mock data
-                return None
-                
+                payload = {"query": query}
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        logger.info(f"The Graph API response status: {response.status}")
+                        
+                        if "errors" in data:
+                            logger.error(f"The Graph API errors: {data['errors']}")
+                            return None
+                            
+                        parsed_data = self._parse_graph_response(data)
+                        if parsed_data:
+                            parsed_data["data_source"] = "thegraph_real"
+                            return parsed_data
+                        else:
+                            logger.info("No data found for this address in The Graph")
+                            return None
+                    else:
+                        response_text = await response.text()
+                        logger.error(f"The Graph API error {response.status}: {response_text}")
+                        return None
+                        
         except Exception as e:
-            logger.error(f"Error fetching real data: {e}")
+            logger.error(f"Error fetching real data from The Graph: {e}")
             return None
     
     def _parse_graph_response(self, response: Dict) -> Dict[str, Any]:

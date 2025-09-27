@@ -1,0 +1,20 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[environments.production]
+PORT = 8000
+
+# Environment variables (set these in Railway dashboard)
+# TELEGRAM_BOT_TOKEN = "your_telegram_bot_token_here"
+# REPLICATE_API_TOKEN = "your_replicate_token_here" 
+
+# The Graph API credentials are already in the code
+# GRAPH_API_KEY = "server_051c84a4913a66795ff4139a1fc98e86"
+# GRAPH_JWT_TOKEN = "eyJhbGciOiJLTVNFUzI1NiIsInR5cCI6IkpXVCJ9..."

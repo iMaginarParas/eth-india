@@ -23,8 +23,9 @@ var/
 .installed.cfg
 *.egg
 
-# Virtual environment
+# Virtual environments
 venv/
+.venv/
 ENV/
 env/
 env.bak/
@@ -53,13 +54,13 @@ coverage.xml
 logs/
 *.log
 
-# IDEs
+# IDEs and editors
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
 
-# MacOS
+# macOS
 .DS_Store
 
 # Shell scripts (optional)

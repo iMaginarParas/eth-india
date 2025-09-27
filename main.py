@@ -1,387 +1,366 @@
-"""
-AI Portfolio Agent Backend - main.py (Simplified)
-Focus on testing core integrations:
-- The Graph: fetching wallet data
-- Pyth: market feed integration  
-- Polygon: deployment chain
-"""
-
-import asyncio
-import logging
 import os
-from typing import Dict, List, Optional, Any
-from decimal import Decimal
+import asyncio
+import httpx
+import json
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
-
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from web3 import Web3
-
-# Import our custom modules
-from thegraph import GraphDataFetcher
-from pyth import PythPriceService
-from polygon import PolygonConnector
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import uvicorn
 
 # Configuration
 class Config:
-    THE_GRAPH_API_KEY: str = os.getenv("THE_GRAPH_API_KEY", "demo-key")
-    PYTH_HERMES_URL: str = "https://hermes.pyth.network"
-    POLYGON_RPC_URL: str = "https://polygon-rpc.com"
-    POLYGON_CHAIN_ID: int = 137
+    # The Graph API credentials (replace with your actual values)
+    GRAPH_API_KEY = "server_051c84a4913a66795ff4139a1fc98e86"
+    GRAPH_JWT_TOKEN = "eyJhbGciOiJLTVNFUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3OTUwMDc1ODIsImp0aSI6IjJlODI5NzAxLWYzNDYtNDE1NC04YTQ0LTYyNjU3Y2NiNmJkNSIsImlhdCI6MTc1OTAwNzU4MiwiaXNzIjoiZGZ1c2UuaW8iLCJzdWIiOiIwc2ltZWNjYWJjMTc5ZTQ0YzRlZmQiLCJ2IjoyLCJha2kiOiJlZGQyYzBmN2EwMWZlOGJiYmM5MWE3Y2QwZGMzNDkxZmRlYzczZTVhZDg0YTM0ZjdiMmIzMDBhNmIyMzIxY2E2IiwidWlkIjoiMHNpbWVjY2FiYzE3OWU0NGM0ZWZkIiwic3Vic3RyZWFtc19wbGFuX3RpZXIiOiJGUkVFIiwiY2ZnIjp7IlNVQlNUUkVBTVNfTUFYX1JFUVVFU1RTIjoiMiIsIlNVQlNUUkVBTVNfUEFSQUxMRUxfSk9CUyI6IjUiLCJTVUJTVFJFQU1TX1BBUkFMTEVMX1dPUktFUlMiOiI1In19.CEF9j0FD224mRQNm9B3vH5F_AI_-Y6cF9WL2Sclg_kiK1ekvq0VtAu9Ay1RaRo2EEvoAn8ZBKSm0oNfn7Vgvmg"
+    
+    # Telegram Bot Token (you'll need to create this with @BotFather)
+    TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+    
+    # Replicate API Token (for AI analysis)
+    REPLICATE_API_TOKEN = "YOUR_REPLICATE_API_TOKEN"
+    
+    # The Graph endpoints
+    GRAPH_TOKEN_API_URL = "https://api.thegraph.com/token/v1"
+    GRAPH_SUBGRAPH_URL = "https://api.thegraph.com/subgraphs/name"
 
-config = Config()
+# Data models
+class TelegramUpdate(BaseModel):
+    update_id: int
+    message: Optional[Dict] = None
 
-# Pydantic Models
-class WalletRequest(BaseModel):
+class ContractAnalysis(BaseModel):
+    contract_address: str
+    risk_score: int  # 0-100
+    risk_level: str  # "LOW", "MEDIUM", "HIGH", "CRITICAL"
+    summary: str
+    details: List[str]
+    analyzed_at: datetime
+
+@dataclass
+class TokenData:
     address: str
+    name: str
+    symbol: str
+    total_supply: Optional[str]
+    holders_count: int
+    transfers_count: int
+    price_usd: Optional[float]
 
-# FastAPI App
-app = FastAPI(title="AI Portfolio Agent - Core Testing", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Global instances
-graph_fetcher: Optional[GraphDataFetcher] = None
-pyth_service: Optional[PythPriceService] = None
-polygon_connector: Optional[PolygonConnector] = None
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize all services"""
-    global graph_fetcher, pyth_service, polygon_connector
-    
-    logger.info("🚀 Starting AI Portfolio Agent Core Services...")
-    
-    try:
-        # Initialize The Graph data fetcher
-        graph_fetcher = GraphDataFetcher(api_key=config.THE_GRAPH_API_KEY)
-        logger.info("✅ The Graph service initialized")
-        
-        # Initialize Pyth price service
-        pyth_service = PythPriceService(hermes_url=config.PYTH_HERMES_URL)
-        logger.info("✅ Pyth service initialized")
-        
-        # Initialize Polygon connector
-        polygon_connector = PolygonConnector(
-            rpc_url=config.POLYGON_RPC_URL,
-            chain_id=config.POLYGON_CHAIN_ID
+class ContractAuditorService:
+    def __init__(self):
+        self.http_client = httpx.AsyncClient(
+            headers={
+                "Authorization": f"Bearer {Config.GRAPH_JWT_TOKEN}",
+                "Content-Type": "application/json"
+            }
         )
-        logger.info("✅ Polygon service initialized")
-        
-        logger.info("🎉 All services initialized successfully!")
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize services: {e}")
-        raise
-
-# 1. THE GRAPH - Test wallet data fetching
-@app.get("/test/thegraph/{address}")
-async def test_thegraph(address: str):
-    """Test The Graph wallet data fetching"""
-    try:
-        logger.info(f"📊 Testing The Graph for address: {address}")
-        
-        # Fetch portfolio data from The Graph
-        portfolio_data = await graph_fetcher.get_user_portfolio(address)
-        
-        return {
-            "service": "The Graph",
-            "status": "success",
-            "address": address,
-            "data": portfolio_data
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ The Graph test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"The Graph error: {str(e)}")
-
-# 2. PYTH - Test market feed integration
-@app.get("/test/pyth/{symbols}")
-async def test_pyth(symbols: str):
-    """Test Pyth price feeds (comma-separated symbols like ETH,BTC,MATIC)"""
-    try:
-        symbol_list = [s.strip().upper() for s in symbols.split(',')]
-        logger.info(f"💰 Testing Pyth price feeds for: {symbol_list}")
-        
-        # Get current prices from Pyth
-        prices = await pyth_service.get_token_prices(symbol_list)
-        
-        return {
-            "service": "Pyth Network",
-            "status": "success",
-            "symbols": symbol_list,
-            "prices": prices
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Pyth test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Pyth error: {str(e)}")
-
-# 3. POLYGON - Test blockchain connection
-@app.get("/test/polygon")
-async def test_polygon():
-    """Test Polygon blockchain connection"""
-    try:
-        logger.info("⛓️ Testing Polygon blockchain connection")
-        
-        # Test blockchain connection
-        block_info = await polygon_connector.get_latest_block()
-        network_info = await polygon_connector.get_network_info()
-        
-        return {
-            "service": "Polygon",
-            "status": "success",
-            "latest_block": block_info,
-            "network_info": network_info
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Polygon test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Polygon error: {str(e)}")
-
-# Get wallet balance on Polygon
-@app.get("/test/polygon/balance/{address}")
-async def test_polygon_balance(address: str):
-    """Test getting wallet balance on Polygon"""
-    try:
-        logger.info(f"💰 Testing Polygon balance for address: {address}")
-        
-        # Get MATIC balance
-        balance_info = await polygon_connector.get_balance(address)
-        
-        return {
-            "service": "Polygon Balance",
-            "status": "success",
-            "address": address,
-            "balance": balance_info
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Polygon balance test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Polygon balance error: {str(e)}")
-
-# Get token balance on Polygon
-@app.get("/test/polygon/token/{token_address}/{user_address}")
-async def test_polygon_token_balance(token_address: str, user_address: str):
-    """Test getting ERC20 token balance on Polygon"""
-    try:
-        logger.info(f"🪙 Testing token balance for {token_address} and user {user_address}")
-        
-        # Get token balance
-        token_balance = await polygon_connector.get_token_balance(token_address, user_address)
-        
-        return {
-            "service": "Polygon Token Balance",
-            "status": "success",
-            "token_address": token_address,
-            "user_address": user_address,
-            "balance": token_balance
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Token balance test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Token balance error: {str(e)}")
-
-# COMPREHENSIVE TEST - Test all services together
-@app.post("/test/all")
-async def test_all_services(wallet: WalletRequest):
-    """Test all services in a complete workflow"""
-    try:
-        address = wallet.address
-        logger.info(f"🔥 Running comprehensive test for address: {address}")
-        
-        results = {}
-        
-        # 1. Test The Graph - Get portfolio
+    
+    async def get_token_data(self, contract_address: str, chain: str = "ethereum") -> TokenData:
+        """Fetch token data from The Graph Token API"""
         try:
-            portfolio = await graph_fetcher.get_user_portfolio(address)
-            results["thegraph"] = {"status": "success", "data": portfolio}
-        except Exception as e:
-            results["thegraph"] = {"status": "failed", "error": str(e)}
-        
-        # 2. Test Pyth - Get prices for common tokens
-        try:
-            prices = await pyth_service.get_token_prices(["ETH", "BTC", "MATIC", "USDC"])
-            results["pyth"] = {"status": "success", "prices": prices}
-        except Exception as e:
-            results["pyth"] = {"status": "failed", "error": str(e)}
-        
-        # 3. Test Polygon - Get network status and balance
-        try:
-            block_info = await polygon_connector.get_latest_block()
-            network_info = await polygon_connector.get_network_info()
-            balance_info = await polygon_connector.get_balance(address)
+            url = f"{Config.GRAPH_TOKEN_API_URL}/{chain}/{contract_address}"
+            response = await self.http_client.get(url)
+            response.raise_for_status()
             
-            results["polygon"] = {
-                "status": "success", 
-                "block": block_info,
-                "network": network_info,
-                "balance": balance_info
-            }
-        except Exception as e:
-            results["polygon"] = {"status": "failed", "error": str(e)}
-        
-        # Calculate success rate
-        successful_tests = len([r for r in results.values() if r["status"] == "success"])
-        total_tests = len(results)
-        success_rate = (successful_tests / total_tests) * 100
-        
-        return {
-            "comprehensive_test": True,
-            "address": address,
-            "success_rate": f"{success_rate:.1f}%",
-            "successful_services": successful_tests,
-            "total_services": total_tests,
-            "results": results
+            data = response.json()
+            return TokenData(
+                address=contract_address,
+                name=data.get("name", "Unknown"),
+                symbol=data.get("symbol", "Unknown"),
+                total_supply=data.get("totalSupply"),
+                holders_count=data.get("holdersCount", 0),
+                transfers_count=data.get("transfersCount", 0),
+                price_usd=data.get("priceUsd")
+            )
+        except httpx.HTTPError as e:
+            print(f"Error fetching token data: {e}")
+            # Return basic data if API fails
+            return TokenData(
+                address=contract_address,
+                name="Unknown",
+                symbol="Unknown",
+                total_supply=None,
+                holders_count=0,
+                transfers_count=0,
+                price_usd=None
+            )
+    
+    async def get_transaction_patterns(self, contract_address: str) -> Dict:
+        """Query transaction patterns from subgraphs"""
+        # Example GraphQL query for Ethereum mainnet transfers
+        query = """
+        {
+          transfers(
+            first: 100,
+            where: {token: "%s"},
+            orderBy: blockNumber,
+            orderDirection: desc
+          ) {
+            id
+            from
+            to
+            value
+            blockNumber
+            blockTimestamp
+          }
         }
+        """ % contract_address.lower()
         
-    except Exception as e:
-        logger.error(f"❌ Comprehensive test failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Comprehensive test error: {str(e)}")
-
-# Portfolio Analysis - Combine data from all services
-@app.post("/portfolio/analyze")
-async def analyze_portfolio(wallet: WalletRequest):
-    """Analyze portfolio by combining data from all services"""
-    try:
-        address = wallet.address
-        logger.info(f"🔍 Analyzing portfolio for address: {address}")
-        
-        # Get portfolio data from The Graph
-        portfolio_data = await graph_fetcher.get_user_portfolio(address)
-        
-        # Get current prices for portfolio tokens
-        token_symbols = [token["symbol"] for token in portfolio_data.get("tokens", [])]
-        if token_symbols:
-            prices = await pyth_service.get_token_prices(token_symbols)
-        else:
-            prices = {}
-        
-        # Get network status
-        network_info = await polygon_connector.get_network_info()
-        balance_info = await polygon_connector.get_balance(address)
-        
-        # Calculate portfolio values
-        total_value_usd = Decimal('0')
-        enriched_tokens = []
-        
-        for token in portfolio_data.get("tokens", []):
-            symbol = token["symbol"]
-            balance = Decimal(str(token["balance"]))
+        try:
+            # Using a general Ethereum transfers subgraph
+            url = f"{Config.GRAPH_SUBGRAPH_URL}/ethereum/ethereum-transfers"
+            response = await self.http_client.post(
+                url,
+                json={"query": query}
+            )
             
-            # Add price data if available
-            if symbol in prices:
-                current_price = prices[symbol]["price"]
-                token_value_usd = balance * current_price
-                total_value_usd += token_value_usd
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return {"data": {"transfers": []}}
                 
-                enriched_tokens.append({
-                    **token,
-                    "current_price_usd": str(current_price),
-                    "value_usd": str(token_value_usd),
-                    "price_source": prices[symbol]["source"]
-                })
-            else:
-                enriched_tokens.append({
-                    **token,
-                    "current_price_usd": "0",
-                    "value_usd": "0",
-                    "price_source": "unavailable"
-                })
+        except Exception as e:
+            print(f"Error fetching transaction patterns: {e}")
+            return {"data": {"transfers": []}}
+    
+    async def analyze_with_ai(self, token_data: TokenData, transactions: List[Dict]) -> ContractAnalysis:
+        """Analyze contract data using AI (Replicate API)"""
         
-        # Calculate portfolio allocation percentages
-        for token in enriched_tokens:
-            if total_value_usd > 0:
-                allocation_pct = (Decimal(token["value_usd"]) / total_value_usd) * 100
-                token["allocation_percentage"] = str(allocation_pct.quantize(Decimal('0.01')))
-            else:
-                token["allocation_percentage"] = "0"
+        # Prepare data summary for AI analysis
+        analysis_prompt = f"""
+        Analyze this smart contract for potential risks:
         
-        return {
-            "address": address,
-            "analysis_timestamp": "2024-01-01T00:00:00Z",
-            "network_info": network_info,
-            "native_balance": balance_info,
-            "portfolio_summary": {
-                "total_value_usd": str(total_value_usd),
-                "token_count": len(enriched_tokens),
-                "positions_count": len(portfolio_data.get("positions", []))
-            },
-            "tokens": enriched_tokens,
-            "positions": portfolio_data.get("positions", []),
-            "price_data_sources": {
-                symbol: data.get("source", "unknown") 
-                for symbol, data in prices.items()
-            }
+        Token: {token_data.name} ({token_data.symbol})
+        Address: {token_data.address}
+        Total Supply: {token_data.total_supply}
+        Holders: {token_data.holders_count}
+        Transfers: {token_data.transfers_count}
+        Price: ${token_data.price_usd}
+        
+        Recent Transactions: {len(transactions)} transfers analyzed
+        
+        Red flags to check:
+        1. Low holder count vs high transfers (potential wash trading)
+        2. Large token concentration in few wallets
+        3. Unusual transfer patterns
+        4. No price data or extreme volatility
+        5. Very new token with high activity
+        
+        Provide a risk score (0-100) and explanation in plain English.
+        """
+        
+        # For demo purposes, we'll create a simple risk assessment
+        # In production, you'd call Replicate API here
+        risk_score = self._calculate_risk_score(token_data, transactions)
+        risk_level = self._get_risk_level(risk_score)
+        
+        details = []
+        
+        # Basic risk checks
+        if token_data.holders_count < 100:
+            details.append("⚠️ Low number of token holders - potential for price manipulation")
+        
+        if token_data.transfers_count > token_data.holders_count * 10:
+            details.append("🔴 High transfer to holder ratio - possible wash trading")
+        
+        if not token_data.price_usd:
+            details.append("⚠️ No price data available - token may not be trading")
+        
+        if len(transactions) == 0:
+            details.append("ℹ️ No recent transaction data available")
+        
+        # Analyze transaction patterns
+        if transactions:
+            unique_addresses = set()
+            for tx in transactions:
+                unique_addresses.add(tx.get('from', ''))
+                unique_addresses.add(tx.get('to', ''))
+            
+            if len(unique_addresses) < 10:
+                details.append("🔴 Very few unique addresses in recent transactions")
+        
+        summary = f"Risk Level: {risk_level}. "
+        if risk_score < 30:
+            summary += "This token appears relatively safe based on available data."
+        elif risk_score < 70:
+            summary += "Some concerning patterns detected. Proceed with caution."
+        else:
+            summary += "Multiple red flags detected. High risk of scam or manipulation."
+        
+        return ContractAnalysis(
+            contract_address=token_data.address,
+            risk_score=risk_score,
+            risk_level=risk_level,
+            summary=summary,
+            details=details,
+            analyzed_at=datetime.now()
+        )
+    
+    def _calculate_risk_score(self, token_data: TokenData, transactions: List[Dict]) -> int:
+        """Simple risk scoring algorithm"""
+        score = 0
+        
+        # Low holders
+        if token_data.holders_count < 50:
+            score += 30
+        elif token_data.holders_count < 200:
+            score += 15
+        
+        # High transfer/holder ratio
+        if token_data.holders_count > 0:
+            ratio = token_data.transfers_count / token_data.holders_count
+            if ratio > 20:
+                score += 25
+            elif ratio > 10:
+                score += 15
+        
+        # No price data
+        if not token_data.price_usd:
+            score += 20
+        
+        # Few recent transactions
+        if len(transactions) < 5:
+            score += 10
+        
+        return min(score, 100)
+    
+    def _get_risk_level(self, score: int) -> str:
+        """Convert risk score to level"""
+        if score < 25:
+            return "LOW"
+        elif score < 50:
+            return "MEDIUM"
+        elif score < 75:
+            return "HIGH"
+        else:
+            return "CRITICAL"
+
+class TelegramBot:
+    def __init__(self, auditor_service: ContractAuditorService):
+        self.auditor = auditor_service
+        self.bot_token = Config.TELEGRAM_BOT_TOKEN
+    
+    async def send_message(self, chat_id: int, text: str):
+        """Send message to Telegram chat"""
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML"
+            })
+    
+    async def process_message(self, message: Dict):
+        """Process incoming Telegram message"""
+        chat_id = message["chat"]["id"]
+        text = message.get("text", "")
+        
+        if text.startswith("/start"):
+            welcome_msg = """
+🔍 <b>Smart Contract Auditor Bot</b>
+
+Send me a contract address and I'll analyze it for potential risks!
+
+Example: 0x1234567890123456789012345678901234567890
+
+⚡ Powered by The Graph Protocol & AI
+            """
+            await self.send_message(chat_id, welcome_msg)
+            return
+        
+        # Check if message looks like a contract address
+        if text.startswith("0x") and len(text) == 42:
+            await self.send_message(chat_id, "🔍 Analyzing contract... Please wait.")
+            
+            try:
+                analysis = await self.analyze_contract(text)
+                response = self._format_analysis(analysis)
+                await self.send_message(chat_id, response)
+            except Exception as e:
+                await self.send_message(chat_id, f"❌ Error analyzing contract: {str(e)}")
+        else:
+            await self.send_message(chat_id, "Please send a valid Ethereum contract address (0x...)")
+    
+    async def analyze_contract(self, contract_address: str) -> ContractAnalysis:
+        """Analyze a contract address"""
+        # Get token data
+        token_data = await self.auditor.get_token_data(contract_address)
+        
+        # Get transaction patterns
+        tx_data = await self.auditor.get_transaction_patterns(contract_address)
+        transactions = tx_data.get("data", {}).get("transfers", [])
+        
+        # Analyze with AI
+        analysis = await self.auditor.analyze_with_ai(token_data, transactions)
+        
+        return analysis
+    
+    def _format_analysis(self, analysis: ContractAnalysis) -> str:
+        """Format analysis results for Telegram"""
+        risk_emoji = {
+            "LOW": "🟢",
+            "MEDIUM": "🟡", 
+            "HIGH": "🟠",
+            "CRITICAL": "🔴"
         }
         
-    except Exception as e:
-        logger.error(f"❌ Portfolio analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Portfolio analysis error: {str(e)}")
+        result = f"""
+🔍 <b>Contract Analysis Results</b>
 
-# Health Check
-@app.get("/health")
-async def health_check():
-    """Service health check"""
-    services_status = {
-        "thegraph": graph_fetcher is not None,
-        "pyth": pyth_service is not None,
-        "polygon": polygon_connector is not None
-    }
-    
-    all_healthy = all(services_status.values())
-    
-    return {
-        "status": "healthy" if all_healthy else "degraded",
-        "services": services_status,
-        "initialized_services": sum(services_status.values()),
-        "total_services": len(services_status)
-    }
+📋 <b>Contract:</b> <code>{analysis.contract_address}</code>
 
-# Root endpoint with instructions
+{risk_emoji.get(analysis.risk_level, "⚪")} <b>Risk Level:</b> {analysis.risk_level}
+📊 <b>Risk Score:</b> {analysis.risk_score}/100
+
+💡 <b>Summary:</b>
+{analysis.summary}
+
+🔍 <b>Details:</b>
+"""
+        
+        for detail in analysis.details:
+            result += f"\n• {detail}"
+        
+        result += f"\n\n⏰ <i>Analyzed at {analysis.analyzed_at.strftime('%Y-%m-%d %H:%M:%S')} UTC</i>"
+        
+        return result
+
+# FastAPI app
+app = FastAPI(title="Smart Contract Auditor Bot")
+
+# Services
+auditor_service = ContractAuditorService()
+telegram_bot = TelegramBot(auditor_service)
+
 @app.get("/")
 async def root():
-    """API instructions"""
-    return {
-        "message": "AI Portfolio Agent - Core Testing API",
-        "endpoints": {
-            "test_thegraph": "GET /test/thegraph/{address} - Test wallet data fetching",
-            "test_pyth": "GET /test/pyth/{symbols} - Test price feeds (ETH,BTC,MATIC)",
-            "test_polygon": "GET /test/polygon - Test blockchain connection",
-            "test_polygon_balance": "GET /test/polygon/balance/{address} - Test wallet balance",
-            "test_polygon_token": "GET /test/polygon/token/{token_address}/{user_address} - Test token balance",
-            "test_all": "POST /test/all - Test all services together",
-            "analyze_portfolio": "POST /portfolio/analyze - Comprehensive portfolio analysis",
-            "health": "GET /health - Service health check"
-        },
-        "example_usage": {
-            "wallet_test": "POST /test/all with {\"address\": \"0x...\"}",
-            "price_test": "GET /test/pyth/ETH,BTC,MATIC",
-            "blockchain_test": "GET /test/polygon",
-            "portfolio_analysis": "POST /portfolio/analyze with {\"address\": \"0x...\"}"
-        }
-    }
+    return {"message": "Smart Contract Auditor Bot is running!"}
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now()}
+
+@app.post("/webhook")
+async def telegram_webhook(update: TelegramUpdate, background_tasks: BackgroundTasks):
+    """Handle Telegram webhook"""
+    if update.message:
+        background_tasks.add_task(telegram_bot.process_message, update.message)
+    
+    return {"ok": True}
+
+@app.post("/analyze")
+async def analyze_contract_endpoint(contract_address: str):
+    """Direct API endpoint for contract analysis"""
+    try:
+        analysis = await telegram_bot.analyze_contract(contract_address)
+        return analysis
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Run the server
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)
